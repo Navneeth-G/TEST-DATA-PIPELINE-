@@ -594,7 +594,242 @@ def get_n_oldest_pending_records(config: Dict, n: int, x_time_back: str, granula
         raise Exception(f"Failed to get {n} oldest pending records: {e}")
 
 
+def count_all_records_for_day(config: Dict, target_day: str) -> int:
+    """
+    Count total records for a target day (both processed and unprocessed)
+    
+    Args:
+        config: Pipeline configuration with pipeline_priority filter
+        target_day: Target day to count (YYYY-MM-DD format)
+        
+    Returns:
+        Total count of records for the day
+    """
+    
+    try:
+        connection = create_snowflake_connection(config)
+        cursor = connection.cursor()
+        
+        sf_config = config['sf_drive_config']
+        table_name = sf_config['sf_table']
+        
+        query = f"""
+        SELECT COUNT(*) as total_count
+        FROM {table_name} 
+        WHERE 
+            PIPELINE_NAME = %(pipeline_name)s
+            AND SOURCE_COMPLETE_CATEGORY = %(source_complete_category)s 
+            AND PIPELINE_PRIORITY = %(pipeline_priority)s
+            AND DATE(TARGET_DAY) = %(target_day)s
+        """
+        
+        params = {
+            'pipeline_name': config['pipeline_name'],
+            'source_complete_category': config['source_complete_category'],
+            'pipeline_priority': config['pipeline_priority'],
+            'target_day': target_day
+        }
+        
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        
+        cursor.close()
+        connection.close()
+        
+        total_count = result[0] if result else 0
+        
+        print(f"Target day {target_day}: {total_count} total records")
+        return total_count
+        
+    except Exception as e:
+        raise Exception(f"Failed to count records for day: {e}")
 
+
+def delete_all_records_for_day(config: Dict, target_day: str) -> bool:
+    """
+    Delete ALL records for a specific target day (day-level regeneration)
+    
+    Args:
+        config: Pipeline configuration with pipeline_priority filter
+        target_day: Target day to delete (YYYY-MM-DD format)
+        
+    Returns:
+        True if successful
+    """
+    
+    try:
+        connection = create_snowflake_connection(config)
+        cursor = connection.cursor()
+        
+        sf_config = config['sf_drive_config']
+        table_name = sf_config['sf_table']
+        
+        query = f"""
+        DELETE FROM {table_name} 
+        WHERE 
+            PIPELINE_NAME = %(pipeline_name)s
+            AND SOURCE_COMPLETE_CATEGORY = %(source_complete_category)s 
+            AND PIPELINE_PRIORITY = %(pipeline_priority)s
+            AND DATE(TARGET_DAY) = %(target_day)s
+        """
+        
+        params = {
+            'pipeline_name': config['pipeline_name'],
+            'source_complete_category': config['source_complete_category'],
+            'pipeline_priority': config['pipeline_priority'],
+            'target_day': target_day
+        }
+        
+        print(f"Deleting ALL records for target day: {target_day}")
+        
+        cursor.execute(query, params)
+        rows_deleted = cursor.rowcount
+        
+        connection.commit()
+        cursor.close()
+        connection.close()
+        
+        print(f"Successfully deleted {rows_deleted} records for {target_day}")
+        return True
+        
+    except Exception as e:
+        raise Exception(f"Failed to delete all records for day: {e}")
+
+
+def find_and_delete_matching_window(config: Dict, unprocessed_record: Dict) -> bool:
+    """
+    Find and delete record matching the specific time window
+    
+    Args:
+        config: Pipeline configuration
+        unprocessed_record: Record with specific WINDOW_START_TIME and WINDOW_END_TIME
+        
+    Returns:
+        True if found and deleted, False if no match found
+    """
+    
+    try:
+        connection = create_snowflake_connection(config)
+        cursor = connection.cursor()
+        
+        sf_config = config['sf_drive_config']
+        table_name = sf_config['sf_table']
+        
+        # Extract window times
+        window_start = unprocessed_record['WINDOW_START_TIME']
+        window_end = unprocessed_record['WINDOW_END_TIME']
+        target_day = unprocessed_record['TARGET_DAY']
+        
+        # Convert to ISO strings for comparison
+        if hasattr(window_start, 'to_iso8601_string'):
+            window_start_str = window_start.to_iso8601_string()
+        else:
+            window_start_str = str(window_start)
+            
+        if hasattr(window_end, 'to_iso8601_string'):
+            window_end_str = window_end.to_iso8601_string()
+        else:
+            window_end_str = str(window_end)
+            
+        if hasattr(target_day, 'to_date_string'):
+            target_day_str = target_day.to_date_string()
+        else:
+            target_day_str = str(target_day)
+        
+        query = f"""
+        DELETE FROM {table_name} 
+        WHERE 
+            PIPELINE_NAME = %(pipeline_name)s
+            AND SOURCE_COMPLETE_CATEGORY = %(source_complete_category)s 
+            AND PIPELINE_PRIORITY = %(pipeline_priority)s
+            AND DATE(TARGET_DAY) = %(target_day)s
+            AND WINDOW_START_TIME = %(window_start_time)s
+            AND WINDOW_END_TIME = %(window_end_time)s
+            AND CONTINUITY_CHECK_PERFORMED = 'YES'
+        """
+        
+        params = {
+            'pipeline_name': config['pipeline_name'],
+            'source_complete_category': config['source_complete_category'],
+            'pipeline_priority': config['pipeline_priority'],
+            'target_day': target_day_str,
+            'window_start_time': window_start_str,
+            'window_end_time': window_end_str
+        }
+        
+        print(f"Looking for matching window: {window_start_str} to {window_end_str}")
+        
+        cursor.execute(query, params)
+        rows_deleted = cursor.rowcount
+        
+        connection.commit()
+        cursor.close()
+        connection.close()
+        
+        if rows_deleted > 0:
+            print(f"✅ Deleted {rows_deleted} matching window record(s)")
+            return True
+        else:
+            print(f"⚠️  No matching window found to delete")
+            return False
+            
+    except Exception as e:
+        raise Exception(f"Failed to find and delete matching window: {e}")
+
+
+def update_single_record_flag_to_yes(config: Dict, unprocessed_record: Dict) -> bool:
+    """
+    Update single unprocessed record's flag to YES
+    
+    Args:
+        config: Pipeline configuration
+        unprocessed_record: Record to update (uses PIPELINE_ID for exact match)
+        
+    Returns:
+        True if successful
+    """
+    
+    try:
+        connection = create_snowflake_connection(config)
+        cursor = connection.cursor()
+        
+        sf_config = config['sf_drive_config']
+        table_name = sf_config['sf_table']
+        
+        pipeline_id = unprocessed_record['PIPELINE_ID']
+        
+        query = f"""
+        UPDATE {table_name} 
+        SET 
+            CONTINUITY_CHECK_PERFORMED = 'YES',
+            RECORD_LAST_UPDATED_TIME = %(updated_time)s
+        WHERE 
+            PIPELINE_ID = %(pipeline_id)s
+            AND PIPELINE_PRIORITY = %(pipeline_priority)s
+        """
+        
+        params = {
+            'pipeline_id': pipeline_id,
+            'pipeline_priority': config['pipeline_priority'],
+            'updated_time': pendulum.now().to_iso8601_string()
+        }
+        
+        cursor.execute(query, params)
+        rows_updated = cursor.rowcount
+        
+        connection.commit()
+        cursor.close()
+        connection.close()
+        
+        if rows_updated > 0:
+            print(f"✅ Updated record flag to YES")
+            return True
+        else:
+            print(f"⚠️  No records updated - pipeline priority mismatch?")
+            return False
+            
+    except Exception as e:
+        raise Exception(f"Failed to update record flag: {e}")
 
 
 

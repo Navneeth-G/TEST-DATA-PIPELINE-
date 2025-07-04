@@ -215,6 +215,7 @@ def create_single_pipeline_record(config: Dict, target_day: str, window_start: p
        "WINDOW_END_TIME": window_end,
        "TIME_INTERVAL": time_interval,
        "COMPLETED_PHASE": "NONE",
+       "COMPLETED_PHASE_DURATION": None,
        "PIPELINE_STATUS": "PENDING",
        "PIPELINE_START_TIME": None,
        "PIPELINE_END_TIME": None,
@@ -530,6 +531,102 @@ def create_and_insert_records_bulk(target_days: List[str], granularity: str, con
        
    except Exception as e:
        raise Exception(f"Failed bulk processing: {e}")
+
+
+def validate_window_boundaries(unprocessed_record: Dict, config: Dict) -> bool:
+    """
+    Validate window-specific record has proper time boundaries
+    
+    Args:
+        unprocessed_record: Record with time windows to validate
+        config: Pipeline configuration for timezone
+        
+    Returns:
+        True if valid, raises exception if invalid
+        
+    Validation Rules:
+        - Both window_start_time and window_end_time must be present
+        - window_start_time < window_end_time
+        - Both times must be within target_day boundaries
+    """
+    
+    try:
+        window_start = unprocessed_record.get('WINDOW_START_TIME')
+        window_end = unprocessed_record.get('WINDOW_END_TIME')
+        target_day = unprocessed_record.get('TARGET_DAY')
+        
+        # Check presence
+        if window_start is None or window_end is None:
+            raise ValueError("Window-specific records must have both WINDOW_START_TIME and WINDOW_END_TIME")
+        
+        # Convert to pendulum objects if needed
+        if not hasattr(window_start, 'timestamp'):
+            window_start = pendulum.parse(str(window_start))
+        if not hasattr(window_end, 'timestamp'):
+            window_end = pendulum.parse(str(window_end))
+        if not hasattr(target_day, 'to_date_string'):
+            target_day = pendulum.parse(str(target_day))
+        
+        # Check window_start < window_end
+        if window_start >= window_end:
+            raise ValueError(f"WINDOW_START_TIME ({window_start}) must be before WINDOW_END_TIME ({window_end})")
+        
+        # Check both times are within target day
+        target_date = target_day.date() if hasattr(target_day, 'date') else pendulum.parse(str(target_day)).date()
+        start_date = window_start.date()
+        end_date = window_end.date()
+        
+        if start_date != target_date:
+            raise ValueError(f"WINDOW_START_TIME date ({start_date}) must match TARGET_DAY ({target_date})")
+        
+        if end_date != target_date and end_date != target_date.add(days=1):
+            raise ValueError(f"WINDOW_END_TIME date ({end_date}) must be within TARGET_DAY ({target_date}) or start of next day")
+        
+        # Special case: window_end can be 00:00:00 of next day (end of target day)
+        if end_date == target_date.add(days=1):
+            if window_end.hour != 0 or window_end.minute != 0 or window_end.second != 0:
+                raise ValueError(f"If WINDOW_END_TIME is next day, it must be 00:00:00, got {window_end.time()}")
+        
+        print(f"✅ Window boundaries valid: {window_start} to {window_end}")
+        return True
+        
+    except Exception as e:
+        raise Exception(f"Window boundary validation failed: {e}")
+
+
+def determine_regeneration_scope(unprocessed_records: List[Dict]) -> str:
+    """
+    Determine regeneration scope for a group of records for same target day
+    
+    Args:
+        unprocessed_records: All unprocessed records for same target day
+        
+    Returns:
+        "DAY_LEVEL" or "WINDOW_SPECIFIC"
+        
+    Logic:
+        - If ANY record lacks time windows → DAY_LEVEL (default wins)
+        - If ALL records have time windows → WINDOW_SPECIFIC
+    """
+    
+    try:
+        if not unprocessed_records:
+            return "DAY_LEVEL"
+        
+        # Check if any record lacks time windows
+        for record in unprocessed_records:
+            window_start = record.get('WINDOW_START_TIME')
+            window_end = record.get('WINDOW_END_TIME')
+            
+            if window_start is None or window_end is None:
+                print(f"📅 Day-level regeneration detected (record without time windows)")
+                return "DAY_LEVEL"
+        
+        print(f"🎯 Window-specific processing detected (all records have time windows)")
+        return "WINDOW_SPECIFIC"
+        
+    except Exception as e:
+        raise Exception(f"Failed to determine regeneration scope: {e}")
 
 
 

@@ -442,6 +442,422 @@ def process_new_target_day(config: Dict, granularity: str, x_time_back: str) -> 
         raise Exception(f"Failed to process new target day: {e}")
 
 
+def process_unprocessed_records_intelligently(config: Dict, granularity: str) -> Dict:
+    """
+    Intelligently handle unprocessed records with day-level vs window-specific logic
+    
+    Args:
+        config: Pipeline configuration dictionary
+        granularity: Time granularity for day-level regeneration
+        
+    Returns:
+        Dictionary with processing results
+        
+    Logic:
+        1. Get unprocessed records (filtered by pipeline priority)
+        2. Group by target day
+        3. For each day: determine scope (day-level vs window-specific)
+        4. Apply appropriate strategy
+        5. Clean up processed trigger records
+    """
+    
+    try:
+        # Validate config
+        validate_config(config)
+        
+        print("=== Starting Intelligent Unprocessed Record Processing ===")
+        
+        # Step 1: Get unprocessed records (already filtered by pipeline priority)
+        unprocessed_records = get_unprocessed_records(config)
+        
+        if not unprocessed_records:
+            print("✅ No unprocessed records found")
+            return {
+                'processing_summary': {
+                    'total_unprocessed_records': 0,
+                    'total_target_days': 0,
+                    'day_level_regenerations': 0,
+                    'window_specific_replacements': 0,
+                    'execution_completed_at': pendulum.now().to_iso8601_string()
+                },
+                'day_results': []
+            }
+        
+        print(f"Found {len(unprocessed_records)} unprocessed records")
+        
+        # Step 2: Group by target day
+        unprocessed_by_day = {}
+        for record in unprocessed_records:
+            target_day = extract_target_day_from_record(record)
+            if target_day not in unprocessed_by_day:
+                unprocessed_by_day[target_day] = []
+            unprocessed_by_day[target_day].append(record)
+        
+        print(f"Records span {len(unprocessed_by_day)} target days")
+        
+        # Step 3: Process each day
+        day_results = []
+        day_level_count = 0
+        window_specific_count = 0
+        
+        for target_day, day_records in unprocessed_by_day.items():
+            print(f"\n--- Processing Target Day: {target_day} ---")
+            print(f"Unprocessed records for this day: {len(day_records)}")
+            
+            try:
+                # Determine scope
+                scope = determine_regeneration_scope(day_records)
+                
+                if scope == "DAY_LEVEL":
+                    # Strategy 1: Complete day regeneration
+                    result = handle_day_level_regeneration(config, target_day, granularity, day_records)
+                    day_level_count += 1
+                    
+                elif scope == "WINDOW_SPECIFIC":
+                    # Strategy 2: Window-specific replacement
+                    result = handle_window_specific_replacement(config, target_day, day_records)
+                    window_specific_count += 1
+                
+                day_results.append(result)
+                
+            except Exception as e:
+                error_result = {
+                    'target_day': target_day,
+                    'scope': 'ERROR',
+                    'success': False,
+                    'error': str(e),
+                    'records_processed': 0
+                }
+                day_results.append(error_result)
+                print(f"❌ Failed to process {target_day}: {e}")
+        
+        # Step 4: Compile overall results
+        total_success = sum(1 for result in day_results if result.get('success', False))
+        
+        overall_result = {
+            'processing_summary': {
+                'total_unprocessed_records': len(unprocessed_records),
+                'total_target_days': len(unprocessed_by_day),
+                'successful_days': total_success,
+                'failed_days': len(day_results) - total_success,
+                'day_level_regenerations': day_level_count,
+                'window_specific_replacements': window_specific_count,
+                'granularity': granularity,
+                'execution_completed_at': pendulum.now().to_iso8601_string()
+            },
+            'day_results': day_results
+        }
+        
+        print(f"\n=== Intelligent Processing Complete ===")
+        print(f"Days processed: {total_success}/{len(unprocessed_by_day)}")
+        print(f"Day-level regenerations: {day_level_count}")
+        print(f"Window-specific replacements: {window_specific_count}")
+        
+        return overall_result
+        
+    except Exception as e:
+        raise Exception(f"Failed intelligent unprocessed record processing: {e}")
+
+
+def handle_day_level_regeneration(config: Dict, target_day: str, granularity: str, trigger_records: List[Dict]) -> Dict:
+    """
+    Handle complete day regeneration strategy
+    
+    Args:
+        config: Pipeline configuration
+        target_day: Target day to regenerate
+        granularity: Time granularity for new records
+        trigger_records: All trigger records for this day (will be deleted)
+        
+    Returns:
+        Day processing result
+    """
+    
+    try:
+        print(f"🔄 Executing DAY_LEVEL regeneration for {target_day}")
+        
+        # Step 1: Delete ALL existing records for the day
+        delete_success = delete_all_records_for_day(config, target_day)
+        
+        if not delete_success:
+            print(f"❌ Failed to delete existing records for {target_day}")
+            return {
+                'target_day': target_day,
+                'scope': 'DAY_LEVEL',
+                'success': False,
+                'error': 'Failed to delete existing records',
+                'records_created': 0
+            }
+        
+        # Step 2: Create complete new day records
+        creation_result = create_and_insert_records_bulk([target_day], granularity, config)
+        
+        success = creation_result['successful_days'] > 0
+        records_created = creation_result['total_records_created']
+        
+        if success:
+            print(f"✅ Successfully regenerated {records_created} records for {target_day}")
+        else:
+            print(f"❌ Failed to create new records for {target_day}")
+        
+        return {
+            'target_day': target_day,
+            'scope': 'DAY_LEVEL',
+            'success': success,
+            'trigger_records_count': len(trigger_records),
+            'records_created': records_created,
+            'creation_result': creation_result
+        }
+        
+    except Exception as e:
+        return {
+            'target_day': target_day,
+            'scope': 'DAY_LEVEL',
+            'success': False,
+            'error': str(e),
+            'records_created': 0
+        }
+
+
+def handle_window_specific_replacement(config: Dict, target_day: str, unprocessed_records: List[Dict]) -> Dict:
+    """
+    Handle window-specific replacement strategy
+    
+    Args:
+        config: Pipeline configuration
+        target_day: Target day being processed
+        unprocessed_records: Records with specific time windows
+        
+    Returns:
+        Day processing result
+    """
+    
+    try:
+        print(f"🎯 Executing WINDOW_SPECIFIC replacement for {target_day}")
+        
+        windows_processed = 0
+        windows_successful = 0
+        
+        for record in unprocessed_records:
+            try:
+                print(f"Processing window: {record.get('WINDOW_START_TIME')} to {record.get('WINDOW_END_TIME')}")
+                
+                # Validate window boundaries
+                validate_window_boundaries(record, config)
+                
+                # Find and delete matching existing window
+                delete_success = find_and_delete_matching_window(config, record)
+                
+                # Update trigger record flag to YES
+                update_success = update_single_record_flag_to_yes(config, record)
+                
+                if update_success:
+                    windows_successful += 1
+                    print(f"✅ Successfully processed window")
+                else:
+                    print(f"⚠️  Failed to update trigger record flag")
+                
+                windows_processed += 1
+                
+            except Exception as e:
+                print(f"❌ Failed to process window: {e}")
+                windows_processed += 1
+        
+        success = windows_successful == windows_processed
+        
+        result = {
+            'target_day': target_day,
+            'scope': 'WINDOW_SPECIFIC',
+            'success': success,
+            'windows_processed': windows_processed,
+            'windows_successful': windows_successful,
+            'trigger_records_count': len(unprocessed_records)
+        }
+        
+        if success:
+            print(f"✅ Successfully processed all {windows_successful} windows for {target_day}")
+        else:
+            print(f"⚠️  Processed {windows_successful}/{windows_processed} windows for {target_day}")
+        
+        return result
+        
+    except Exception as e:
+        return {
+            'target_day': target_day,
+            'scope': 'WINDOW_SPECIFIC',
+            'success': False,
+            'error': str(e),
+            'windows_processed': 0
+        }
+
+
+def extract_target_day_from_record(record: Dict) -> str:
+    """
+    Extract target day string from record
+    
+    Args:
+        record: Record dictionary with TARGET_DAY field
+        
+    Returns:
+        Target day as string (YYYY-MM-DD format)
+    """
+    
+    target_day = record.get('TARGET_DAY')
+    
+    if target_day is None:
+        raise ValueError("Record missing TARGET_DAY field")
+    
+    if isinstance(target_day, str):
+        return target_day
+    elif hasattr(target_day, 'to_date_string'):
+        return target_day.to_date_string()
+    else:
+        # Parse and extract date
+        parsed_date = pendulum.parse(str(target_day))
+        return parsed_date.to_date_string()
+
+def process_unprocessed_and_gaps_intelligent(config: Dict, granularity: str) -> Dict:
+    """
+    UPDATED: Process unprocessed records intelligently + fill gaps
+    
+    Args:
+        config: Pipeline configuration dictionary
+        granularity: Time granularity like "1h", "30m", "1d2h30m"
+        
+    Returns:
+        Dictionary with processing results
+        
+    Logic:
+        1. Process unprocessed records intelligently (day-level vs window-specific)
+        2. Find and fill gaps in processed days
+    """
+    
+    try:
+        validate_config(config)
+        
+        print("=== Starting INTELLIGENT Unprocessed and Gap Processing ===")
+        
+        # Step 1: Handle unprocessed records intelligently
+        unprocessed_result = process_unprocessed_records_intelligently(config, granularity)
+        
+        # Step 2: Find and fill gaps (existing logic)
+        print(f"\nStep 2: Finding gaps in processed days...")
+        processed_days = get_target_days_for_pipeline(config)
+        
+        if processed_days:
+            gap_days = find_gaps_in_processed_days_efficient(processed_days)
+            
+            if gap_days:
+                print(f"Found {len(gap_days)} gap days - creating records...")
+                gap_result = create_and_insert_records_bulk(gap_days, granularity, config)
+            else:
+                print("No gaps found")
+                gap_result = {
+                    'total_days_requested': 0,
+                    'successful_days': 0,
+                    'failed_days': 0,
+                    'total_records_created': 0,
+                    'granularity': granularity,
+                    'day_results': []
+                }
+        else:
+            print("No processed days found")
+            gap_result = {
+                'total_days_requested': 0,
+                'successful_days': 0,
+                'failed_days': 0,
+                'total_records_created': 0,
+                'granularity': granularity,
+                'day_results': []
+            }
+        
+        # Compile overall results
+        overall_result = {
+            'processing_summary': {
+                'unprocessed_handling': unprocessed_result['processing_summary'],
+                'gap_filling': {
+                    'total_gap_days': len(gap_days) if 'gap_days' in locals() else 0,
+                    'successful_days': gap_result['successful_days'],
+                    'total_records_created': gap_result['total_records_created']
+                },
+                'execution_completed_at': pendulum.now().to_iso8601_string()
+            },
+            'unprocessed_results': unprocessed_result,
+            'gap_results': gap_result
+        }
+        
+        print(f"\n=== INTELLIGENT Processing Complete ===")
+        print(f"Unprocessed: {unprocessed_result['processing_summary']['successful_days']} days")
+        print(f"Gaps filled: {gap_result['successful_days']} days")
+        
+        return overall_result
+        
+    except Exception as e:
+        raise Exception(f"Failed intelligent unprocessed and gap processing: {e}")
+
+
+# Update main wrapper function
+def main_record_creation_intelligent(config: Dict, granularity: str, x_time_back: str = "1d") -> bool:
+    """
+    UPDATED: Main wrapper with intelligent unprocessed record handling
+    
+    Args:
+        config: Pipeline configuration dictionary
+        granularity: Time granularity like "1h", "30m", "1d2h30m"
+        x_time_back: Time to go back for new target day (default: "1d")
+        
+    Returns:
+        bool: True if all processing completed successfully
+    """
+    
+    try:
+        print("=" * 60)
+        print("🚀 STARTING INTELLIGENT MAIN RECORD CREATION")
+        print("=" * 60)
+        
+        overall_success = True
+        
+        # Phase 1: Intelligent unprocessed + gaps
+        print("\n" + "=" * 40)
+        print("PHASE 1: Intelligent Unprocessed & Gap Processing")
+        print("=" * 40)
+        
+        try:
+            phase1_result = process_unprocessed_and_gaps_intelligent(config, granularity)
+            
+            unprocessed_success = phase1_result['unprocessed_results']['processing_summary']['successful_days']
+            gap_success = phase1_result['gap_results']['successful_days']
+            
+            print(f"✅ Phase 1: Unprocessed({unprocessed_success}) + Gaps({gap_success})")
+            
+        except Exception as e:
+            print(f"❌ Phase 1 failed: {e}")
+            overall_success = False
+        
+        # Phase 2: New target day (existing logic)
+        print("\n" + "=" * 40)
+        print("PHASE 2: New Target Day Processing")
+        print("=" * 40)
+        
+        try:
+            phase2_result = process_new_target_day(config, granularity, x_time_back)
+            
+            if phase2_result['processing_summary']['total_successful_days'] > 0 or phase2_result['processing_summary']['processing_skipped']:
+                print(f"✅ Phase 2: New target day processed")
+            else:
+                print(f"❌ Phase 2: New target day failed")
+                overall_success = False
+                
+        except Exception as e:
+            print(f"❌ Phase 2 failed: {e}")
+            overall_success = False
+        
+        print(f"\n🎯 Overall Success: {overall_success}")
+        return overall_success
+        
+    except Exception as e:
+        print(f"❌ MAIN INTELLIGENT CREATION FAILED: {e}")
+        return False
 
 
 
