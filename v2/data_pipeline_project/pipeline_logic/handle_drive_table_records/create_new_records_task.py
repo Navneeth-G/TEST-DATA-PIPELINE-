@@ -529,3 +529,5 @@ def find_missing_days_in_range(existing_days: Set[pendulum.Date],
     except Exception as e:
         logger.error(f"Error finding missing days: {str(e)}")
         raise
+
+

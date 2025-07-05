@@ -684,3 +684,11 @@ def process_continuity_check_no_records_with_database_operations(records_list, c
     except Exception as e:
         logger.error(f"Critical error in continuity check processing: {str(e)}")
         raise
+
+
+
+
+
+
+
+

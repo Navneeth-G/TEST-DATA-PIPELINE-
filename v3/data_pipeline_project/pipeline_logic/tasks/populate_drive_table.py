@@ -1,4 +1,17 @@
+import re
+import hashlib
 import pendulum
+import logging
+from typing import Dict, List, Tuple, Union, Set
+from tabulate import tabulate
+
+from pipeline_logic.tools_spcific.snowflake.drive_table_queries import (
+    is_target_day_complete,
+    delete_target_day_records,
+    bulk_insert_records,
+    fetch_incomplete_target_days,
+    fetch_all_target_days
+)
 
 
 
@@ -38,6 +51,48 @@ def calculate_window_end_time_within_day(WINDOW_START_TIME: pendulum.DateTime, e
 
     # Return the smaller of the two times
     return min(proposed_end_time, next_day_start)
+
+
+def generate_consecutive_windows_for_target_day(     target_day: pendulum.DateTime,    duration_seconds: int ) -> List[Tuple[pendulum.DateTime, pendulum.DateTime, pendulum.DateTime, str]]:
+    """
+    Generate a list of consecutive time windows for the given target day.
+
+    Returns a tuple of:
+      - target_day (pendulum.DateTime)
+      - window_start_time (pendulum.DateTime)
+      - window_end_time (pendulum.DateTime)
+      - time_interval (str in granularity format)
+
+    Args:
+        target_day: Any datetime on the target day.
+        duration_seconds: Window size in seconds.
+
+    Returns:
+        List of tuples.
+    """
+    windows = []
+    day_start = target_day.start_of('day')
+    next_day_start = day_start.add(days=1)
+
+    window_start = day_start
+
+    while window_start < next_day_start:
+        # Calculate end time (capped at next day start)
+        window_end = calculate_window_end_time_within_day(window_start, duration_seconds)
+
+        # Compute the window duration
+        duration = (window_end - window_start).in_seconds()
+
+        # Format the duration as a string
+        time_interval = convert_seconds_to_granularity(duration)
+
+        # Add the full tuple
+        windows.append((target_day, window_start, window_end, time_interval))
+
+        # Move to the next window
+        window_start = window_end
+
+    return windows
 
 
 
@@ -222,7 +277,7 @@ def generate_TARGET_COMPLETE_CATEGORY(config: Dict, WINDOW_START_TIME: pendulum.
         WINDOW_END_TIME: Window end time
         
     Returns:
-        Target complete category string: "database.schema.table|prefix/YYYY-MM-DD/HH-mm/"
+        Target complete category string: "target_table_three_part_name|prefix/YYYY-MM-DD/HH-mm/"
     """
     
     try:
@@ -230,7 +285,7 @@ def generate_TARGET_COMPLETE_CATEGORY(config: Dict, WINDOW_START_TIME: pendulum.
         
         # Get required config fields
         s3_prefix_list = config.get("s3_prefix_list")
-        database_path = config.get("database.schema.table")
+        database_path = config.get("target_table_three_part_name")
         
         # Build s3_prefix_sub from list
         s3_prefix_sub = '/'.join(s3_prefix_list)
@@ -361,16 +416,218 @@ def generate_PIPELINE_ID(PIPELINE_NAME: str, SOURCE_COMPLETE_CATEGORY: str, STAG
         raise
 
 
+def single_record_creation_for_given_time_windows( config: Dict, target_day: pendulum.DateTime,   window_start_time: pendulum.DateTime,    window_end_time: pendulum.DateTime,    time_interval: str) -> Dict:
+    """
+    Build a single pipeline record where all timestamps are stored as ISO 8601 strings.
 
-def single_record_creation_for_given_time_windows(config: Dict, TARGET_DAY:pendulum.DateTime, WINDOW_START_TIME: pendulum.DateTime,  WINDOW_END_TIME: pendulum.DateTime, TIME_INTERVAL: str):
+    Args:
+        config: Pipeline configuration.
+        target_day: The day for which the record is created (pendulum.DateTime).
+        window_start_time: Start of the window (pendulum.DateTime).
+        window_end_time: End of the window (pendulum.DateTime).
+        time_interval: Time interval string in granularity format.
+
+    Returns:
+        A dictionary representing the complete record.
+    """
+    # Get current timestamp in configured timezone
+    timezone = config.get('timezone', 'UTC')
+    current_time = pendulum.now(timezone)
+
+    # Generate categories
+    source_category = generate_SOURCE_COMPLETE_CATEGORY(config, window_start_time, window_end_time)
+    stage_category = generate_STAGE_COMPLETE_CATEGORY(config, window_start_time, window_end_time)
+    target_category = generate_TARGET_COMPLETE_CATEGORY(config, window_start_time, window_end_time)
+
+    # Generate pipeline ID
+    pipeline_id = generate_PIPELINE_ID(
+        config['PIPELINE_NAME'],
+        source_category,
+        stage_category,
+        target_category,
+        window_start_time,
+        window_end_time
+    )
+
+    # Build and return the record with all timestamps as ISO strings
+    return {
+        "PIPELINE_NAME": config['PIPELINE_NAME'],
+        "SOURCE_COMPLETE_CATEGORY": source_category,
+        "STAGE_COMPLETE_CATEGORY": stage_category,
+        "TARGET_COMPLETE_CATEGORY": target_category,
+        "PIPELINE_ID": pipeline_id,
+        "TARGET_DAY": target_day.to_iso8601_string(),
+        "WINDOW_START_TIME": window_start_time.to_iso8601_string(),
+        "WINDOW_END_TIME": window_end_time.to_iso8601_string(),
+        "TIME_INTERVAL": time_interval,
+        "COMPLETED_PHASE": "NONE",
+        "COMPLETED_PHASE_DURATION": None,
+        "PIPELINE_STATUS": "PENDING",
+        "PIPELINE_START_TIME": None,
+        "PIPELINE_END_TIME": None,
+        "PIPELINE_PRIORITY": config.get('PIPELINE_PRIORITY', 1.0),
+        "CONTINUITY_CHECK_PERFORMED": "YES",
+        "CAN_ACCESS_HISTORICAL_DATA": config.get('CAN_ACCESS_HISTORICAL_DATA', 'YES'),
+        "RECORD_FIRST_CREATED_TIME": current_time.to_iso8601_string(),
+        "RECORD_LAST_UPDATED_TIME": current_time.to_iso8601_string(),
+        "SOURCE_COUNT": 0,
+        "TARGET_COUNT": 0,
+        "COUNT_DIFF": 0,
+        "COUNT_DIFF_PERCENTAGE": 0.0
+    }
+
+
+def generate_records_for_target_day(config: Dict, target_day: pendulum.DateTime) -> List[Dict]:
+    """
+    Create a list of records for the given target day, split by the configured granularity.
+
+    Args:
+        config: Pipeline configuration containing 'granularity' and other fields.
+        target_day: Target day for which to generate records.
+
+    Returns:
+        List[Dict]: List of pipeline records (one for each window).
+    """
+    # Convert granularity to seconds
+    granularity_str = config.get('granularity')
+    if not granularity_str:
+        raise ValueError("Missing 'granularity' in config")
+
+    duration_seconds = parse_granularity_to_seconds(granularity_str)
+
+    # Generate all windows for the day
+    windows = generate_consecutive_windows_for_target_day(target_day, duration_seconds)
+
+    # Create a record for each window
+    records = []
+    for tgt_day, window_start, window_end, interval_str in windows:
+        record = single_record_creation_for_given_time_windows(
+            config=config,
+            target_day=tgt_day,
+            window_start_time=window_start,
+            window_end_time=window_end,
+            time_interval=interval_str
+        )
+        records.append(record)
+
+    return records
+
+
+
+def orchestrate_drive_table_population(target_day: str, config: dict) -> None:
+    """
+    Main orchestration function to ensure Drive table data continuity.
+
+    Args:
+        target_day: The target day for this DAG run, as a string (YYYY-MM-DD).
+        config: Dictionary with configuration details.
+    """
+    # ---------------- STEP 1: Process DAG target day ----------------
+    if is_target_day_complete(target_day):
+        logger.info(f"Target day {target_day} already complete. Skipping insert.")
+    else:
+        logger.info(f"Inserting or rebuilding target day: {target_day}")
+        delete_target_day_records(target_day)
+        fresh_records = generate_records_for_target_day(config, target_day)
+        bulk_insert_records(fresh_records)
+
+    # ---------------- STEP 2: Fix previously incomplete days ----------------
+    incomplete_days = fetch_incomplete_target_days()
+    incomplete_days.discard(target_day)  # Already handled in step 1
+    for incomplete_day in sorted(incomplete_days):
+        logger.info(f"Rebuilding incomplete day: {incomplete_day}")
+        delete_target_day_records(incomplete_day)
+        fresh_records = generate_records_for_target_day(config, incomplete_day)
+        bulk_insert_records(fresh_records)
+
+    # ---------------- STEP 3: Fill continuity gaps ----------------
+    all_target_days = fetch_all_target_days()
+    missing_days = find_missing_target_days(all_target_days)
+    for missing_day in sorted(missing_days):
+        logger.info(f"Filling missing day: {missing_day}")
+        fresh_records = generate_records_for_target_day(config, missing_day)
+        bulk_insert_records(fresh_records)
+
+    logger.info("Drive table continuity ensured.")
 
 
 
 
+def find_missing_target_days(existing_days: Set[str]) -> Set[str]:
+    """
+    Given a set of existing target days (YYYY-MM-DD as strings), find missing days
+    between the min and max target day (inclusive).
+
+    Args:
+        existing_days (Set[str]): Set of target days as YYYY-MM-DD strings.
+
+    Returns:
+        Set[str]: Set of missing target days as YYYY-MM-DD strings.
+    """
+
+    if not existing_days:
+        return set()
+
+    # Convert to pendulum.DateTime for range operations
+    day_objects = [pendulum.parse(day) for day in existing_days]
+
+    min_day = min(day_objects).start_of('day')
+    max_day = max(day_objects).start_of('day')
+
+    # Build full set of days from min to max
+    all_days = {min_day.add(days=i).to_date_string() for i in range((max_day - min_day).days + 1)}
+
+    # Find missing days
+    missing_days = all_days - existing_days
+
+    return missing_days
 
 
 
+# # Setup basic logging
+# logging.basicConfig(level=logging.INFO)
+# logger = logging.getLogger(__name__)
 
+# if __name__ == "__main__":
+#     # Example config
+#     config = {
+#         'PIPELINE_NAME': 'test_pipeline',
+#         'granularity': '9h',
+#         'timezone': 'America/Los_Angeles',
+#         'index_group': 'group1',
+#         'index_name': 'index1',
+#         's3_bucket': 'test-bucket',
+#         's3_prefix_list': ['data', 'stage'],
+#         'index_id': 'IDX001',
+#         'target_table_three_part_name': 'mydb.schema.table',
+#         'PIPELINE_PRIORITY': 1.0,
+#         'CAN_ACCESS_HISTORICAL_DATA': 'YES'
+#     }
+
+#     # Calculate target day (yesterday)
+#     target_day = get_start_of_day_relative_to_now(config['timezone'], ago_seconds=86400)
+
+#     # Generate records
+#     records = generate_records_for_target_day(config, target_day)
+
+#     # Prepare rows for tabular print
+#     table = []
+#     headers = ["PIPELINE_ID", "TARGET_DAY", "WINDOW_START_TIME", "WINDOW_END_TIME", "TIME_INTERVAL", "STAGE_COMPLETE_CATEGORY"]
+    
+#     for record in records:
+#         row = [
+#             record["PIPELINE_ID"][:8],  # Shorten hash for readability
+#             record["TARGET_DAY"],
+#             record["WINDOW_START_TIME"],
+#             record["WINDOW_END_TIME"],
+#             record["TIME_INTERVAL"],
+#             record["STAGE_COMPLETE_CATEGORY"]
+#         ]
+#         table.append(row)
+
+#     # Print table
+#     print("\nGenerated Pipeline Records:\n")
+#     print(tabulate(table, headers=headers, tablefmt="pretty"))
 
 
 

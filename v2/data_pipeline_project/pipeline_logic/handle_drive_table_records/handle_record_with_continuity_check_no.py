@@ -53,16 +53,16 @@ def handle_record_with_continuity_check_as_no(record, config, target_days_list_w
             
             if window_result["has_complete_windows"]:
                 # Branch 1A: Rebuild single record
-                logger.info("🔄 Branch 1A: Rebuilding single record with windows")
+                logger.info(" Branch 1A: Rebuilding single record with windows")
                 return _execute_branch_1a(record, config)
             else:
                 # Branch 1B: Missing window data
-                logger.info("🔄 Branch 1B: Missing window data - creating all records for day")
+                logger.info(" Branch 1B: Missing window data - creating all records for day")
                 return _execute_branch_1b(record, config)
         
         else:
             # Branch 1C: New target day
-            logger.info(f"🔄 Branch 1C: New TARGET_DAY {TARGET_DAY} - creating all records for day")
+            logger.info(f" Branch 1C: New TARGET_DAY {TARGET_DAY} - creating all records for day")
             return _execute_branch_1c(TARGET_DAY, config)
     
     except Exception as e:
