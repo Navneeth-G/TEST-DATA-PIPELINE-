@@ -1,4 +1,6 @@
 {
+"number_of_parallel_runs":3,
+"ingestion_pause_base_seconds":10,
 "index_host_id":"my_ID_this",
 "index_group":"C1",
 "index_name":"x1",

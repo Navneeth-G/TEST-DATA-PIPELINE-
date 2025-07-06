@@ -130,10 +130,7 @@ def generate_consecutive_windows_for_target_day(target_day: pendulum.DateTime, d
 
     return windows
 
-def create_single_record(config: Dict, target_day: pendulum.DateTime,
-                         window_start: pendulum.DateTime,
-                         window_end: pendulum.DateTime,
-                         time_interval: str) -> Dict:
+def create_single_record(config: Dict, target_day: pendulum.DateTime,  window_start: pendulum.DateTime, window_end: pendulum.DateTime, time_interval: str) -> Dict:
 
     source_category = generate_SOURCE_COMPLETE_CATEGORY(config, window_start, window_end)
     stage_category = generate_STAGE_COMPLETE_CATEGORY(config, window_start, window_end)
@@ -174,6 +171,8 @@ def create_single_record(config: Dict, target_day: pendulum.DateTime,
         "TARGET_COUNT": None,
         "COUNT_DIFF": None,
         "COUNT_DIFF_PERCENTAGE": None,
+        "AUDIT_RESULT":None
+        "RETRY_ATTEMPT":None
     }
 
 
@@ -202,7 +201,7 @@ def generate_STAGE_COMPLETE_CATEGORY(config: Dict, window_start: pendulum.DateTi
     time_part = window_start.format('HH-mm')
     epoch = int(pendulum.now(config.get("timezone")).timestamp())
 
-    value = f"{s3_bucket}|s3://{s3_bucket}/{s3_prefix}/{date_part}/{time_part}/{config.get('index_id')}_{epoch}.json"
+    value = f"{s3_bucket}|s3://{s3_bucket}/{s3_prefix}/{date_part}/{time_part}/{config.get('index_id')}_****.json"
     print(f"[CategoryGeneration] STAGE_COMPLETE_CATEGORY: {value}")
     return value
 
