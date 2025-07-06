@@ -1,0 +1,42 @@
+{
+"index_group":"C1",
+"index_name":"x1",
+"SOURCE_COMPLETE_CATEGORY": "{index_group}|{index_name}",
+"PIPELINE_NAME":"ELASTICSEARCH|AWS S3|SNOWFLAKE",
+"granularity":"1h",
+"x_time_back":"1d",
+"timezone":"America/Los_Angeles",
+
+"drive_table": "DRIVE_TBL",
+"drive_schema": "{env}_{index_name}_SCHEMA",
+"drive_database":"{env}_{index_group}_DATABASE",
+
+"target_table":"{index_group}_{index_name}_TBL",
+"target_schema":"{env}_{index_name}_SCHEMA",
+"target_database":"{env}_{index_group}_DATABASE",
+
+"s3_bucket":"new_bucket",
+"s3_prefix_list":["warehouse_related_folder","{index_group}","{index_name}"],
+"sf_user":"me",
+"sf_password":"xyz",
+"sf_account":"971",
+"sf_warehouse":"wh1",
+"sf_role":"lead",
+
+"es_user":"hehe",
+"es_host_id":"hoo_id",
+
+"airflow_CRON":"0 * * * *",
+"airflow_owner":"its_me",
+"airflow_dag_name":"{env}_{index_group}_{index_name}_test_01",
+"airflow_tags":["{env}","{index_group}","{index_name}","{airflow_owner}","{es_host_id}"],
+
+"dag_email_recipients": ["user1@example.com", "user2@example.com"],
+"dag_email_on_failure": true,
+"dag_email_on_retry": false,
+"dag_retries": 3,
+"dag_retry_delay_minutes": 15
+
+
+
+}

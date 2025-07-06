@@ -2,10 +2,10 @@
 
 import functools
 import time
-from framework.utils.pipeline_logger import PipelineLogger
+from data_pipeline_project.pipeline_logic.utils.pipeline_logger import PipelineLogger
 
 
-def log_block(subject: str, log_key: str = "GENERAL"):
+def log_block(subject: str, log_key: str = "DataPipeline"):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):

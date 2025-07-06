@@ -5,7 +5,7 @@ import logging
 from typing import Dict, List, Tuple, Union, Set
 from tabulate import tabulate
 
-from pipeline_logic.tools_spcific.snowflake.drive_table_queries import (
+from data_pipeline_project.pipeline_logic.tools_spcific.snowflake.drive_table_queries import (
     is_target_day_complete,
     delete_target_day_records,
     bulk_insert_records,
@@ -14,18 +14,31 @@ from pipeline_logic.tools_spcific.snowflake.drive_table_queries import (
 )
 
 
-def main_drive_table_population(target_day, config):
+def main_drive_table_population(config: dict) -> bool:
     """
-    Main entrypoint for drive table population with error propagation.
+    Main entrypoint for drive table population.
+
     Args:
-        target_day: pendulum.DateTime target day.
-        config: Pipeline config dict.
+        config: Pipeline config dict. Should contain 'timezone' and 'x_time_back' keys.
+
+    Returns:
+        True if successful, raises Exception otherwise.
     """
     try:
-        orchestrate_drive_table_population_given_target_day(target_day, config)
+        # Step 1: Calculate target day
+        secs = parse_granularity_to_seconds(config.get('x_time_back'))
+        current_time = pendulum.now(config['timezone'])
+        target_time = current_time.subtract(seconds=secs)
+        target_day_str = target_time.to_date_string()  # 'YYYY-MM-DD'
+
+        # Step 2: Orchestrate drive table population
+        orchestrate_drive_table_population_given_target_day(target_day_str, config)
+
         return True
+
     except Exception:
-        raise  
+        raise
+
 
 
 
@@ -338,8 +351,10 @@ def generate_TARGET_COMPLETE_CATEGORY(config: Dict, WINDOW_START_TIME: pendulum.
         
         # Get required config fields
         s3_prefix_list = config.get("s3_prefix_list")
-        database_path = config.get("target_table_three_part_name")
-        
+        target_database = config.get("target_database")
+        target_schema = config.get("target_schema")
+        target_table = config.get("target_table")
+        target_table_three_part_name = ".".join([ target_database,target_schema,target_table ])
         # Build s3_prefix_sub from list
         s3_prefix_sub = '/'.join(s3_prefix_list)
         
