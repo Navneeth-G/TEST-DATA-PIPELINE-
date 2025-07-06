@@ -5,6 +5,36 @@ import json
 from pathlib import Path
 
 
+def main_config_handler(config_relative_path: str, project_root: str) -> dict:
+    config_sub = load_and_resolve_config(config_relative_path,project_root)
+    sf_drive_config = {
+        'table':config_sub["drive_table"],
+        'schema':config_sub["drive_schema"],
+        'database':config_sub["drive_database"],
+
+        'user':config_sub["sf_user"],
+        'password':config_sub["sf_password"],
+        'account':config_sub["sf_account"],      
+        'role':config_sub["sf_role"],
+        'warehouse':config_sub["sf_warehouse"]
+    }
+    config_sub['sf_drive_config'] = sf_drive_config
+    sf_target_config = {
+        'table':config_sub["target_table"],
+        'schema':config_sub["target_schema"],
+        'database':config_sub["target_database"],
+
+        'user':config_sub["sf_user"],
+        'password':config_sub["sf_password"],
+        'account':config_sub["sf_account"],      
+        'role':config_sub["sf_role"],
+        'warehouse':config_sub["sf_warehouse"]
+    }
+    config_sub['sf_target_config'] = sf_target_config
+
+
+    return config_sub
+
 def load_and_resolve_config(config_relative_path: str, project_root: str) -> dict:
     """
     Load a JSON config file and resolve all {placeholders} using the config dictionary itself,

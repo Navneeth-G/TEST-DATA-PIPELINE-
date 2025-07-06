@@ -7,7 +7,7 @@ import pendulum
 from pathlib import Path
 
 # Import config and task
-from data_pipeline_project.pipeline_logic.config_handler import load_and_resolve_config
+from data_pipeline_project.pipeline_logic.config_handler import main_config_handler
 from data_pipeline_project.pipeline_logic.tasks.populate_drive_table import main_drive_table_population
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -17,7 +17,7 @@ from data_pipeline_project.pipeline_logic.tasks.populate_drive_table import main
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 CONFIG_RELATIVE_PATH = "projects/category/sub_category/config.json"
 
-config = load_and_resolve_config(CONFIG_RELATIVE_PATH, str(PROJECT_ROOT))
+config = main_config_handler(CONFIG_RELATIVE_PATH, str(PROJECT_ROOT))
 
 # Extract airflow specific params
 DAG_ID = config.get("airflow_dag_name", "default_dag")
