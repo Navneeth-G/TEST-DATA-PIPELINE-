@@ -9,8 +9,8 @@
 "timezone":"America/Los_Angeles",
 
 "drive_table": "DRIVE_TBL",
-"drive_schema": "{env}_{index_name}_SCHEMA",
-"drive_database":"{env}_{index_group}_DATABASE",
+"drive_schema": "{env}_new_thing_hee_SCHEMA",
+"drive_database":"{env}_ayo_DATABASE",
 
 "target_table":"{index_group}_{index_name}_TBL",
 "target_schema":"{env}_{index_name}_SCHEMA",
