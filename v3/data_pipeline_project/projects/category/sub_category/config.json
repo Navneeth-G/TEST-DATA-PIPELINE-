@@ -1,4 +1,5 @@
 {
+"index_host_id":"my_ID_this",
 "index_group":"C1",
 "index_name":"x1",
 "SOURCE_COMPLETE_CATEGORY": "{index_group}|{index_name}",
