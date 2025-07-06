@@ -14,6 +14,59 @@ from pipeline_logic.tools_spcific.snowflake.drive_table_queries import (
 )
 
 
+def main_drive_table_population(target_day, config):
+    """
+    Main entrypoint for drive table population with error propagation.
+    Args:
+        target_day: pendulum.DateTime target day.
+        config: Pipeline config dict.
+    """
+    try:
+        orchestrate_drive_table_population_given_target_day(target_day, config)
+        return True
+    except Exception:
+        raise  
+
+
+
+def orchestrate_drive_table_population_given_target_day(target_day: str, config: dict) -> None:
+    """
+    Main orchestration function to ensure Drive table data continuity.
+
+    Args:
+        target_day: The target day for this DAG run, as a string (YYYY-MM-DD).
+        config: Dictionary with configuration details.
+    """
+    # ---------------- STEP 1: Process DAG target day ----------------
+    if is_target_day_complete(target_day):
+        logger.info(f"Target day {target_day} already complete. Skipping insert.")
+    else:
+        logger.info(f"Inserting or rebuilding target day: {target_day}")
+        delete_target_day_records(target_day)
+        fresh_records = generate_records_for_target_day(config, target_day)
+        bulk_insert_records(fresh_records)
+
+    # ---------------- STEP 2: Fix previously incomplete days ----------------
+    incomplete_days = fetch_incomplete_target_days()
+    incomplete_days.discard(target_day)  # Already handled in step 1
+    for incomplete_day in sorted(incomplete_days):
+        logger.info(f"Rebuilding incomplete day: {incomplete_day}")
+        delete_target_day_records(incomplete_day)
+        fresh_records = generate_records_for_target_day(config, incomplete_day)
+        bulk_insert_records(fresh_records)
+
+    # ---------------- STEP 3: Fill continuity gaps ----------------
+    all_target_days = fetch_all_target_days()
+    missing_days = find_missing_target_days(all_target_days)
+    for missing_day in sorted(missing_days):
+        logger.info(f"Filling missing day: {missing_day}")
+        fresh_records = generate_records_for_target_day(config, missing_day)
+        bulk_insert_records(fresh_records)
+
+    logger.info("Drive table continuity ensured.")
+
+
+
 
 def get_start_of_day_relative_to_now(timezone: str, ago_seconds: int) -> pendulum.DateTime:
     """
@@ -431,7 +484,7 @@ def single_record_creation_for_given_time_windows( config: Dict, target_day: pen
         A dictionary representing the complete record.
     """
     # Get current timestamp in configured timezone
-    timezone = config.get('timezone', 'UTC')
+    timezone = config.get('timezone')
     current_time = pendulum.now(timezone)
 
     # Generate categories
@@ -456,24 +509,24 @@ def single_record_creation_for_given_time_windows( config: Dict, target_day: pen
         "STAGE_COMPLETE_CATEGORY": stage_category,
         "TARGET_COMPLETE_CATEGORY": target_category,
         "PIPELINE_ID": pipeline_id,
-        "TARGET_DAY": target_day.to_iso8601_string(),
+        "TARGET_DAY": target_day.to_date_string(),
         "WINDOW_START_TIME": window_start_time.to_iso8601_string(),
         "WINDOW_END_TIME": window_end_time.to_iso8601_string(),
         "TIME_INTERVAL": time_interval,
-        "COMPLETED_PHASE": "NONE",
+        "COMPLETED_PHASE": None,
         "COMPLETED_PHASE_DURATION": None,
         "PIPELINE_STATUS": "PENDING",
         "PIPELINE_START_TIME": None,
         "PIPELINE_END_TIME": None,
-        "PIPELINE_PRIORITY": config.get('PIPELINE_PRIORITY', 1.0),
+        "PIPELINE_PRIORITY": config.get('PIPELINE_PRIORITY', 1.3),
         "CONTINUITY_CHECK_PERFORMED": "YES",
         "CAN_ACCESS_HISTORICAL_DATA": config.get('CAN_ACCESS_HISTORICAL_DATA', 'YES'),
         "RECORD_FIRST_CREATED_TIME": current_time.to_iso8601_string(),
         "RECORD_LAST_UPDATED_TIME": current_time.to_iso8601_string(),
-        "SOURCE_COUNT": 0,
-        "TARGET_COUNT": 0,
-        "COUNT_DIFF": 0,
-        "COUNT_DIFF_PERCENTAGE": 0.0
+        "SOURCE_COUNT": None,
+        "TARGET_COUNT": None,
+        "COUNT_DIFF": None,
+        "COUNT_DIFF_PERCENTAGE": None,
     }
 
 
@@ -514,45 +567,6 @@ def generate_records_for_target_day(config: Dict, target_day: pendulum.DateTime)
 
 
 
-def orchestrate_drive_table_population(target_day: str, config: dict) -> None:
-    """
-    Main orchestration function to ensure Drive table data continuity.
-
-    Args:
-        target_day: The target day for this DAG run, as a string (YYYY-MM-DD).
-        config: Dictionary with configuration details.
-    """
-    # ---------------- STEP 1: Process DAG target day ----------------
-    if is_target_day_complete(target_day):
-        logger.info(f"Target day {target_day} already complete. Skipping insert.")
-    else:
-        logger.info(f"Inserting or rebuilding target day: {target_day}")
-        delete_target_day_records(target_day)
-        fresh_records = generate_records_for_target_day(config, target_day)
-        bulk_insert_records(fresh_records)
-
-    # ---------------- STEP 2: Fix previously incomplete days ----------------
-    incomplete_days = fetch_incomplete_target_days()
-    incomplete_days.discard(target_day)  # Already handled in step 1
-    for incomplete_day in sorted(incomplete_days):
-        logger.info(f"Rebuilding incomplete day: {incomplete_day}")
-        delete_target_day_records(incomplete_day)
-        fresh_records = generate_records_for_target_day(config, incomplete_day)
-        bulk_insert_records(fresh_records)
-
-    # ---------------- STEP 3: Fill continuity gaps ----------------
-    all_target_days = fetch_all_target_days()
-    missing_days = find_missing_target_days(all_target_days)
-    for missing_day in sorted(missing_days):
-        logger.info(f"Filling missing day: {missing_day}")
-        fresh_records = generate_records_for_target_day(config, missing_day)
-        bulk_insert_records(fresh_records)
-
-    logger.info("Drive table continuity ensured.")
-
-
-
-
 def find_missing_target_days(existing_days: Set[str]) -> Set[str]:
     """
     Given a set of existing target days (YYYY-MM-DD as strings), find missing days
@@ -581,6 +595,7 @@ def find_missing_target_days(existing_days: Set[str]) -> Set[str]:
     missing_days = all_days - existing_days
 
     return missing_days
+
 
 
 

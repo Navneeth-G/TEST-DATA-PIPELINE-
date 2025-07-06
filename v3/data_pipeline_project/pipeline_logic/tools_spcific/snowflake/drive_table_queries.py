@@ -11,18 +11,35 @@ def get_snowflake_connection(sf_config: dict):
     connection_params = {k: sf_config[k] for k in allowed_keys if k in sf_config}
     return snowflake.connector.connect(**connection_params)
 
-
 def convert_snowflake_date(value, timezone: str) -> pendulum.DateTime:
     """
-    Convert a Snowflake DATE/TIMESTAMP field to pendulum.DateTime, applying the configured timezone.
+    Convert a Snowflake DATE string (YYYY-MM-DD) to pendulum.DateTime in the given timezone.
     """
     if value is None:
         raise ValueError("Cannot convert None to pendulum.DateTime")
-    if hasattr(value, 'isoformat'):
-        return pendulum.parse(value.isoformat(), tz='UTC').in_timezone(timezone)
+
     if isinstance(value, str):
-        return pendulum.parse(value, tz='UTC').in_timezone(timezone)
+        # Parse as naive date → apply target timezone
+        return pendulum.parse(value).in_timezone(timezone)
+
+    if hasattr(value, 'isoformat'):
+        # If Snowflake returned datetime.date or datetime.datetime
+        return pendulum.parse(value.isoformat()).in_timezone(timezone)
+
     raise TypeError(f"Unsupported type for Snowflake date conversion: {type(value)}")
+
+
+# def convert_snowflake_date(value, timezone: str) -> pendulum.DateTime:
+#     """
+#     Convert a Snowflake DATE/TIMESTAMP field to pendulum.DateTime, applying the configured timezone.
+#     """
+#     if value is None:
+#         raise ValueError("Cannot convert None to pendulum.DateTime")
+#     if hasattr(value, 'isoformat'):
+#         return pendulum.parse(value.isoformat(), tz='UTC').in_timezone(timezone)
+#     if isinstance(value, str):
+#         return pendulum.parse(value, tz='UTC').in_timezone(timezone)
+#     raise TypeError(f"Unsupported type for Snowflake date conversion: {type(value)}")
 
 
 def is_target_day_complete(target_day: str, config: dict) -> bool:
@@ -146,3 +163,8 @@ def fetch_all_target_days(config: dict) -> Set[pendulum.DateTime]:
             return {convert_snowflake_date(row[0], timezone) for row in cursor.fetchall()}
     finally:
         conn.close()
+
+
+
+
+
