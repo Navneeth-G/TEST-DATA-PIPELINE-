@@ -2,20 +2,50 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict
 
 from data_pipeline_project.pipeline_logic.utils.pipeline_logger import PipelineLogger
-from data_pipeline_project.pipeline_logic.tasks.main_pipeline import main_pipeline_per_record  # adjust import based on file location
+from data_pipeline_project.pipeline_logic.tasks.main_pipeline import main_pipeline_per_record 
+from data_pipeline_project.pipeline_logic.tasks.pre_validation import run_pre_validation_phase_for_all
+from data_pipeline_project.pipeline_logic.tasks.handle_stale_records  import handle_expired_in_progress_records
+from data_pipeline_project.pipeline_logic.tools_spcific.drive_table_queries import fetch_pending_drive_records
+
 
 logger = PipelineLogger()
 
 
-def run_main_pipeline_for_all(records: List[Dict], config: dict):
+def run_main_pipeline_for_all(config: dict):
     """
-    Run main pipeline for all valid records in parallel,
-    respecting the number of parallel runs and per-record pause time.
+    Main orchestrator for the pipeline run:
+      - Step 1: Handle expired in-progress records
+      - Step 2: Fetch pending records and pre-validate
+      - Step 3: Run valid records in parallel, respecting pause times
+    """
 
-    Args:
-        records (List[Dict]): List of pipeline records.
-        config (dict): Pipeline config containing 'number_of_parallel_runs' and 'parallel_pause_time'.
-    """
+    # ───────────────────────────────
+    # STEP 1: Handle expired in-progress records
+    # ───────────────────────────────
+    handle_expired_in_progress_records(config)
+
+    # ───────────────────────────────
+    # STEP 2: Fetch pending records
+    # ───────────────────────────────
+    limit = config.get("limit", 10)
+    pending_records = fetch_pending_drive_records(config, limit=limit)
+
+    if not pending_records:
+        logger.info(subject="MAIN_PIPELINE", message="No pending records found. Exiting.", log_key="MainPipeline")
+        return
+
+    # ───────────────────────────────
+    # STEP 3: Pre-validation
+    # ───────────────────────────────
+    records = run_pre_validation_phase_for_all(pending_records, config)
+
+    if not records:
+        logger.info(subject="MAIN_PIPELINE", message="No valid records found after pre-validation. Exiting.", log_key="MainPipeline")
+        return
+
+    # ───────────────────────────────
+    # STEP 4: Run in parallel with pause staggering
+    # ───────────────────────────────
     parallel_runs = config.get("number_of_parallel_runs", 2)
 
     logger.info(
@@ -25,18 +55,11 @@ def run_main_pipeline_for_all(records: List[Dict], config: dict):
     )
 
     with ThreadPoolExecutor(max_workers=parallel_runs) as executor:
-        # Submit each record for parallel processing, pass its index to control pause time
         future_to_record = {
-            executor.submit(
-                main_pipeline_per_record,
-                record,
-                config,
-                record_index
-            ): record
+            executor.submit(main_pipeline_per_record, record, config, record_index): record
             for record_index, record in enumerate(records)
         }
 
-        # Wait for all tasks to complete
         for future in as_completed(future_to_record):
             record = future_to_record[future]
             try:
@@ -57,9 +80,8 @@ def run_main_pipeline_for_all(records: List[Dict], config: dict):
                     ERROR=str(e)
                 )
 
-    logger.info(
-        subject="MAIN_PIPELINE",
-        message="All records processed.",
-        log_key="MainPipeline"
-    )
+    logger.info(subject="MAIN_PIPELINE", message="All records processed.", log_key="MainPipeline")
+
+
+
 

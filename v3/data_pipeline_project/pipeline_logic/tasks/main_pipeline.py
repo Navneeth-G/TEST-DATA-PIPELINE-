@@ -3,54 +3,41 @@ from typing import Dict
 
 from data_pipeline_project.pipeline_logic.utils.pipeline_logger import PipelineLogger
 from data_pipeline_project.pipeline_logic.tools_spcific.drive_table_queries import is_phase_complete
-from data_pipeline_project.pipeline_logic.tasks.pre_validation import run_pre_validation_phase_per_record
+# from data_pipeline_project.pipeline_logic.tasks.pre_validation import run_pre_validation_phase_per_record
 from data_pipeline_project.pipeline_logic.tools_spcific.source_to_stage_transfer import source_to_stage_phase
 from data_pipeline_project.pipeline_logic.tools_spcific.stage_to_target_transfer import stage_to_target_phase
 from data_pipeline_project.pipeline_logic.tools_spcific.audit_phase import audit_phase
 
 logger = PipelineLogger()
 
+
+
 def main_pipeline_per_record(record: Dict, config: dict, record_index: int) -> str:
     pipeline_id = record["PIPELINE_ID"]
 
     # ───────────────────────────────
-    # STEP 0: Pause (Staggered Start)
+    # STEP 0: Pause (Staggered Start per Thread Slot)
     # ───────────────────────────────
     pause_base = config.get("parallel_pause_time", 20)
-    pause_seconds = record_index * pause_base
+    parallel_runs = config.get("number_of_parallel_runs", 2)
+
+    # Calculate thread slot-based pause
+    thread_slot = record_index % parallel_runs
+    pause_seconds = thread_slot * pause_base
 
     logger.info(
         subject="MAIN_PIPELINE",
-        message=f"Pausing for {pause_seconds} sec before starting ingestion",
+        message=f"Pausing {pause_seconds} sec for thread slot {thread_slot} before starting ingestion",
         log_key="MainPipeline",
-        PIPELINE_ID=pipeline_id
+        PIPELINE_ID=pipeline_id,
+        RECORD_INDEX=record_index,
+        PARALLEL_RUNS=parallel_runs
     )
 
     if pause_seconds > 0:
         time.sleep(pause_seconds)
 
     try:
-        # ───────────────────────────────
-        # STEP 1: Pre-Validation Phase
-        # ───────────────────────────────
-        if not is_phase_complete(record, config, expected_phase="PRE VALIDATION"):
-            logger.info(
-                subject="MAIN_PIPELINE",
-                message="Pre-validation not complete, running now",
-                log_key="MainPipeline",
-                PIPELINE_ID=pipeline_id
-            )
-            needs_elt = run_pre_validation_phase_per_record(record, config)
-
-            if not needs_elt:
-                logger.info(
-                    subject="MAIN_PIPELINE",
-                    message="Pre-validation counts matched. Pipeline marked SUCCESS. Exiting early.",
-                    log_key="MainPipeline",
-                    PIPELINE_ID=pipeline_id
-                )
-                return "SUCCESS"  # Exit early if counts matched during pre-validation
-
         # ───────────────────────────────
         # STEP 2: Source to Stage Phase
         # ───────────────────────────────
@@ -76,7 +63,7 @@ def main_pipeline_per_record(record: Dict, config: dict, record_index: int) -> s
             stage_to_target_phase(record, config)
 
         # ───────────────────────────────
-        # STEP 4: Audit Phase (optional: always run)
+        # STEP 4: Audit Phase
         # ───────────────────────────────
         audit_phase(record, config)
 

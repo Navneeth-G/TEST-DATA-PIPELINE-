@@ -564,9 +564,7 @@ def fetch_pending_drive_records(config: dict, limit: int = 10) -> List[Dict]:
 
 
 def change_pipeline_status_and_retry_number(pipeline_id: str, new_status: str, retry_attempt: int, config: dict):
-    """
-    Update PIPELINE_STATUS, RECORD_LAST_UPDATED_TIME, and RETRY_ATTEMPT for a single PIPELINE_ID.
-    """
+    """     Update PIPELINE_STATUS, RECORD_LAST_UPDATED_TIME, and RETRY_ATTEMPT for a single PIPELINE_ID.   """
     start_time = time.time()
     
     logger.info(
@@ -640,9 +638,7 @@ def change_pipeline_status_and_retry_number(pipeline_id: str, new_status: str, r
 
 
 def update_completed_phase_and_duration(pipeline_id: str, completed_phase: str, phase_duration_seconds: int, config: dict):
-    """
-    Update COMPLETED_PHASE, COMPLETED_PHASE_DURATION, and RECORD_LAST_UPDATED_TIME for a pipeline record.
-    """
+    """  Update COMPLETED_PHASE, COMPLETED_PHASE_DURATION, and RECORD_LAST_UPDATED_TIME for a pipeline record.   """
     start_time = time.time()
     
     logger.info(
@@ -799,9 +795,7 @@ def reset_pipeline_record_on_count_mismatch(pipeline_id: str, retry_attempt: int
 
 
 def update_pre_validation_results(pipeline_id: str, source_count: int, target_count: int, count_diff: int, count_diff_percentage: float, completed_phase: str, phase_duration_str: str, config: dict):
-    """
-    Update pre-validation results in the drive table.
-    """
+    """     Update pre-validation results in the drive table.  """
     start_time = time.time()
     
     logger.info(
@@ -967,9 +961,7 @@ def is_phase_complete(record: dict, config: dict, expected_phase: str) -> bool:
 
 
 def update_audit_results(pipeline_id: str, source_count: int, target_count: int, count_diff: int, count_diff_percentage: float, audit_result: str, config: dict):
-   """
-   Update the drive table after audit is successful.
-   """
+   """  Update the drive table after audit is successful. """
    start_time = time.time()
    
    logger.info(
@@ -984,11 +976,11 @@ def update_audit_results(pipeline_id: str, source_count: int, target_count: int,
        AUDIT_RESULT=audit_result
    )
 
-   sf_config = config['sf_drive_config']
+   sf_drive_config = config['sf_drive_config']
    now_str = pendulum.now(config.get('timezone')).to_iso8601_string()
 
    query = f"""
-       UPDATE {sf_config['table']}
+       UPDATE {sf_drive_config['table']}
        SET COMPLETED_PHASE = %s,
            PIPELINE_STATUS = %s,
            PIPELINE_END_TIME = %s,
@@ -1016,7 +1008,7 @@ def update_audit_results(pipeline_id: str, source_count: int, target_count: int,
 
    conn = None
    try:
-       conn = get_snowflake_connection(sf_config)
+       conn = get_snowflake_connection(sf_drive_config)
        
        with conn.cursor() as cursor:
            cursor.execute(query, params)
@@ -1079,11 +1071,11 @@ def mark_pre_validation_success(pipeline_id: str, source_count: int, target_coun
        COUNT_DIFF_PERCENTAGE=count_diff_percentage
    )
 
-   sf_config = config['sf_drive_config']
+   sf_drive_config = config['sf_drive_config']
    now_str = pendulum.now(config.get('timezone')).to_iso8601_string()
 
    query = f"""
-       UPDATE {sf_config['table']}
+       UPDATE {sf_drive_config['table']}
        SET COMPLETED_PHASE = %s,
            PIPELINE_STATUS = %s,
            PIPELINE_START_TIME = %s,
@@ -1099,7 +1091,7 @@ def mark_pre_validation_success(pipeline_id: str, source_count: int, target_coun
 
    params = [
        "PRE VALIDATION",
-       "SUCCESS",
+       "COMPLETED",
        now_str,
        now_str,
        now_str,
@@ -1107,13 +1099,13 @@ def mark_pre_validation_success(pipeline_id: str, source_count: int, target_coun
        target_count,
        count_diff,
        round(count_diff_percentage, 2) if count_diff_percentage is not None else None,
-       "SUCCESS",
+       "MATCHED",
        pipeline_id
    ]
 
    conn = None
    try:
-       conn = get_snowflake_connection(sf_config)
+       conn = get_snowflake_connection(sf_drive_config)
        
        with conn.cursor() as cursor:
            cursor.execute(query, params)
@@ -1293,18 +1285,6 @@ def convert_seconds_to_granularity(seconds: int) -> str:
        raise
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def do_target_day_has_CONTINUITY_CHECK_PERFORMED_no(target_day: str, config: dict) -> bool:
     """
     Return True if the target day has records where CONTINUITY_CHECK_PERFORMED != 'YES'.
@@ -1320,9 +1300,9 @@ def do_target_day_has_CONTINUITY_CHECK_PERFORMED_no(target_day: str, config: dic
         PIPELINE_PRIORITY=config.get('PIPELINE_PRIORITY')
     )
     
-    sf_config = config['sf_drive_config']
+    sf_drive_config = config['sf_drive_config']
     query = f"""
-        SELECT count(*) FROM {sf_config['table']}
+        SELECT count(*) FROM {sf_drive_config['table']}
         WHERE TARGET_DAY = %s
           AND SOURCE_COMPLETE_CATEGORY = %s
           AND PIPELINE_NAME = %s
@@ -1339,7 +1319,7 @@ def do_target_day_has_CONTINUITY_CHECK_PERFORMED_no(target_day: str, config: dic
 
     conn = None
     try:
-        conn = get_snowflake_connection(sf_config)
+        conn = get_snowflake_connection(sf_drive_config)
         
         with conn.cursor() as cursor:
             cursor.execute(query, params)
@@ -1405,9 +1385,9 @@ def do_target_day_complete(target_day: str, config: dict) -> bool:
         PIPELINE_PRIORITY=config.get('PIPELINE_PRIORITY')
     )
     
-    sf_config = config['sf_drive_config']
+    sf_drive_config = config['sf_drive_config']
     query = f"""
-        SELECT count(*) FROM {sf_config['table']}
+        SELECT count(*) FROM {sf_drive_config['table']}
         WHERE TARGET_DAY = %s
           AND SOURCE_COMPLETE_CATEGORY = %s
           AND PIPELINE_NAME = %s
@@ -1424,7 +1404,7 @@ def do_target_day_complete(target_day: str, config: dict) -> bool:
 
     conn = None
     try:
-        conn = get_snowflake_connection(sf_config)
+        conn = get_snowflake_connection(sf_drive_config)
         
         with conn.cursor() as cursor:
             cursor.execute(query, params)
@@ -1490,6 +1470,62 @@ def do_target_day_complete(target_day: str, config: dict) -> bool:
                     log_key="TargetDayComplete",
                     ERROR=str(e)
                 )
+
+
+
+def update_single_record_pipeline_status(record: Dict, config: dict):
+    """
+    Update a single drive table record to:
+      - Set PIPELINE_STATUS = 'PENDING'
+      - Increment RETRY_ATTEMPT by 1 (or set to 1 if null)
+      - Reset PIPELINE_START_TIME and PIPELINE_END_TIME to NULL
+
+    Args:
+        record: Single pipeline record (must contain 'PIPELINE_ID').
+        config: Pipeline config dict.
+    """
+
+    sf_drive_config = config["sf_drive_config"]
+    pipeline_id = record.get("PIPELINE_ID")
+
+    if not pipeline_id:
+        logger.warning(
+            subject="RETRY_HANDLER",
+            message="Missing PIPELINE_ID in record. Skipping update.",
+            log_key="RetryHandler"
+        )
+        return
+
+    query = f"""
+        UPDATE {sf_drive_config['table']}
+        SET PIPELINE_STATUS = 'PENDING',
+            RETRY_ATTEMPT = COALESCE(RETRY_ATTEMPT, 0) + 1,
+            PIPELINE_START_TIME = NULL,
+            PIPELINE_END_TIME = NULL
+        WHERE PIPELINE_ID = %s
+    """
+
+    conn = get_snowflake_connection(sf_drive_config)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(query, (pipeline_id,))
+            logger.info(
+                subject="RETRY_HANDLER",
+                message="Updated single record to PENDING with retry incremented",
+                log_key="RetryHandler",
+                PIPELINE_ID=pipeline_id
+            )
+    except Exception as e:
+        logger.error(
+            subject="RETRY_HANDLER",
+            message="Failed to update single record to PENDING",
+            log_key="RetryHandler",
+            PIPELINE_ID=pipeline_id,
+            ERROR=str(e)
+        )
+        raise
+    finally:
+        conn.close()
 
 
 
